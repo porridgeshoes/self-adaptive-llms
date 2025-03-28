@@ -3,11 +3,16 @@ base_model:
 
 
 base_model_name: llama3i8b
-  
+
+# _target_指定使用base_model模块中的Llama3Instruct8B类作为基础模型
+#base_model_name设置为llama3i8b，作为该模型在框架中的标识名
+
 # reference_params_results:
 #   - 'saved_models/llama3i8b/gsm8k/learnable_params.pt'
 #   - 'saved_models/llama3i8b/mbpp/learnable_params.pt'
 #   - 'saved_models/llama3i8b/ai2arc/learnable_params.pt'
+
+# 这些参数文件包含了在特定任务上训练的模型权重，用于自适应过程中动态混合
 
 reference_params_results:
   - "ckpts/learnable_params/llama3_8b_instruct_gsm8k_svd_pg_mlp.pt"

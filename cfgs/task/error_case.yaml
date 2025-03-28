@@ -1,0 +1,5 @@
+task_loader:
+  _target_: tasks.ErrorCaseAdaptationTask
+  error_cases_file: ${oc.env:ERROR_CASES_FILE,null}  # 可以通过环境变量设置错误案例文件路径
+
+task_name: error_case 

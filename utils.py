@@ -7,7 +7,6 @@ import torch
 import torch.utils
 import vllm
 
-
 def load_hf_params_to_vllm(param: Dict, llm: vllm.LLM) -> None:
     """Load weights from HF transformer model to vLLM model."""
 
@@ -104,6 +103,12 @@ def compose_new_params(
     learnable_params,
 ):
     """Compose new parameters from decomposed parameters."""
+    '''
+    这个函数使用SVD分解的组件重新组合参数, 
+    从策略获取掩码(mask)，应用于奇异值,
+    使用修改后的奇异值重新组合参数(U * diag(S * mask) * V^T)
+    同时应用一个缩放因子来保持参数的整体规模(奇异值缩放后，需要保持和一致))
+    '''
     mm = policy.get_mask(learnable_params[param_name])
     return (
         decomposed_params[f"{param_name}.U"]
@@ -120,7 +125,8 @@ def forward(policy, model, base_params, decomposed_params, learnable_params):
     """Forward pass."""
     new_params = {}
     for k in base_params:
-        if "mlp" in k:
+        # MLP是多层感知机(Multi-Layer Perceptron)的缩写，在Transformer架构中通常指前馈神经网络部分
+        if "mlp" in k: # 这里可能会有问题，因为，我看这些所有的层都不是mlp；
             new_params[k] = compose_new_params(
                 policy, k, decomposed_params, learnable_params
             )
@@ -148,6 +154,9 @@ def backward(
     learnable_params,
 ):
     """Backward pass."""
+    # 疑问？？参数可以直接方向传播吗？真厉害！！！应该是提前把梯度计算好了。
+    # 疑问？？最后一个为什么单独处理？
+    # 解答：前面的保留计算图，是因为还需要用；后面的释放是因为不需要再用了，释放掉节省gpu内存。
     keys_to_backprop = [k for k in base_params if "mlp" in k]
     last_key = keys_to_backprop[-1]
     for k in keys_to_backprop[:-1]:
@@ -287,3 +296,40 @@ def eval_model_experts_prompt_based(
     data_dict["final_test_acc"] /= len(classified_samples)
 
     return data_dict
+
+
+@torch.no_grad()
+def apply_svd_params(model, param_name, param_value, decomposed_params):
+    """
+    应用SVD分解后的参数到模型
+    
+    Args:
+        model: 要应用参数的模型
+        param_name: 参数名称
+        param_value: 参数值（掩码）
+        decomposed_params: 分解的参数
+    """
+    if param_name not in decomposed_params:
+        # 如果该参数没有分解，直接返回
+        return
+    
+    # 获取原始参数
+    orig_param = model.get_parameter(param_name)
+    
+    # 获取分解的参数
+    decomp = decomposed_params[param_name]
+    u, s, v = decomp["u"], decomp["s"], decomp["v"]
+    
+    # 应用掩码到奇异值
+    s_prime = s * param_value
+    
+    # 重建参数
+    if u.ndim > 1 and v.ndim > 1:
+        # 标准SVD
+        new_param = u @ torch.diag(s_prime) @ v
+    else:
+        # 如果是一维的情况（例如偏置）
+        new_param = u * s_prime * v
+    
+    # 更新模型参数
+    orig_param.copy_(new_param.to(orig_param.dtype).to(orig_param.device))

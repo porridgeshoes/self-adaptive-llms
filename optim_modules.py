@@ -111,11 +111,13 @@ class Reinforce(OptimizationAlgorithm, nn.Module):
         vllm_model=None,
         **kwargs,
     ):
+        # 1、准备阶段
+        ## 1.1、获取配置参数：是否使用KL损失，KL损失的系数，GPU设备
         use_kl_loss = self.use_kl_loss
         kl_ref_coeff = self.kl_ref_coeff
-
         gpu = self.gpu
 
+        ## 1.2、为当前批次生成提示文本
         prompts = [
             task_loader.get_prompt(
                 tokenizer,
@@ -126,21 +128,36 @@ class Reinforce(OptimizationAlgorithm, nn.Module):
             for i in batch_ix
         ]
 
+        ## 1.3、计算当前批次的实际大小
         clipped_batch_size = len(prompts)
 
+        # 2、模型参数更新和生成
+        ## 2.1、获取策略的可学习参数
         learnable_params = policy.get_learnable_params()
+
+        ## 2.2、前向传播生成新的模型参数
         new_params = forward(
             policy, model, base_params, decomposed_params, learnable_params
         )
 
+        ## 2.3、将新参数加载到VLLM模型中
         print("Loading weights and getting completions with VLLM")
         load_hf_params_to_vllm(new_params, vllm_model.llm)
+
+        ## 2.4、使用新参数生成文本完成
         res = eval_model(vllm_model, train_eval, batch_ix)
+
+        # 3、计算奖励
+        ## 3.1、根据生成的文本完成，计算每个样本的奖励值
         rewards = self.get_rewards(task_loader=task_loader, res=res)
 
+        ## 3.2、对奖励进行统计计算（平均值、标准差、最大值、最小值等）
         rw_stats = get_mean_std_max_min_dict(array=rewards, prefix="rewards")
+        ## 3.3、记录奖励的统计信息
         metrics_to_log.update(**rw_stats)
 
+        # 4、KL散度计算（可选）
+        ## 4.1、如果启用KL损失，计算参考模型的对数概率（这一步骤是为了防止优化后的模型与原始模型偏离太远）
         if use_kl_loss:
             with torch.no_grad():
                 load_base_params(model=model, base_params=original_model_params)
@@ -154,27 +171,38 @@ class Reinforce(OptimizationAlgorithm, nn.Module):
                     policy, model, base_params, decomposed_params, learnable_params
                 )
 
+        # 5、策略梯度计算和反向传播
         print("Computing the policy gradient...")
+        ## 5.1、遍历每个生成的样本，计算策略梯度
         for j, prompt in enumerate(prompts):
+            # 对提示文本和生成的完整文本进行token编码
             input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(gpu)
             prompt_length = input_ids.shape[-1]
+            # 对生成的完整文本（提示+输出）进行编码
             output_ids = tokenizer(
                 prompt + res.sample_details[j]["output"],
                 return_tensors="pt",
             ).input_ids.to(gpu)
+            # 提取出模型生成的部分（从prompt_length开始）
             generated_ids = output_ids[:, prompt_length:]
 
+            # 使用模型计算logits并应用softmax得到对数概率
             outputs = model(output_ids)
             logits = outputs.logits[:, prompt_length - 1 : -1]
+            # 计算log softmax概率
             log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+            # 获取生成token的对数概率
             selected_log_probs = log_probs.gather(
                 2, generated_ids.unsqueeze(-1)
             ).squeeze(-1)
+            # 计算总对数似然
             log_likelihood = selected_log_probs.sum(axis=-1)
 
+            # 计算策略梯度损失（对数似然 × 负奖励）将对数似然与负奖励相乘，得到基本的策略梯度损失
             pg = -log_likelihood * rewards[j]
             loss = pg
 
+            # 如果启用KL损失，加入KL散度约束
             if use_kl_loss:
                 ref_log_probs = ref_log_probs_list[j].to(gpu)
                 kl_div = F.kl_div(
@@ -184,8 +212,13 @@ class Reinforce(OptimizationAlgorithm, nn.Module):
                     reduction="sum",
                 )
                 loss = loss + kl_ref_coeff * kl_div
+            
+            # 对损失进行缩放并执行反向传播
             scaled_loss = loss / clipped_batch_size
+            # 这个反向传播，会让跟loss相关的tensor参数的梯度都被计算出来。
             scaled_loss.backward()
+            
+            # 记录损失指标
             log_dict = {
                 "pg": pg.item(),
                 "loss": loss.item(),
@@ -193,8 +226,13 @@ class Reinforce(OptimizationAlgorithm, nn.Module):
             if use_kl_loss:
                 log_dict["kl_div"] = kl_div.item()
             metrics_to_log.update(**log_dict)
+        
+        # 6、将梯度传播回策略网络：梯度传播
         backward(policy, model, base_params, decomposed_params, learnable_params)
-
+        '''
+        这个方法是强化学习在语言模型优化中的应用，通过直接最大化奖励信号来调整模型的行为，同时可以通过KL散度约束来保持生成文本的自然度和与原始模型的一致性。
+        这种优化方法与传统的监督学习相比，更加灵活，可以针对难以通过传统损失函数表达的目标（如文本生成的质量、特定任务的成功率等）进行优化。
+        '''
     def update(self, policy):
         max_grad_norm = self.max_grad_norm
         torch.nn.utils.clip_grad_norm_(policy.trainable_params, max_grad_norm)

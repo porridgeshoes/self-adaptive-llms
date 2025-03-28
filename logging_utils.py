@@ -34,7 +34,7 @@ class Metrics:
 
     def update(self, **kwargs):
         for arg, val in kwargs.items():
-            if arg not in self.metrics:
+            if arg not in self.metrics: # 对新统计名称的参数进行初始化。
                 self.logged_metrics += arg
                 self.metrics[arg] = 0
                 self.latest_metrics[arg] = 0

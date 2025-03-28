@@ -1,0 +1,51 @@
+# 计算环境设置：LOCAL_MACHINE 表示在本地机器上运行
+compute_environment: LOCAL_MACHINE
+# 是否开启调试模式
+debug: false
+
+# DeepSpeed 相关配置
+deepspeed_config:
+  # DeepSpeed 多节点启动器类型：standard 表示使用标准启动器
+  deepspeed_multinode_launcher: standard
+  # 优化器状态卸载设备：none 表示不卸载
+  offload_optimizer_device: none
+  # 模型参数卸载设备：none 表示不卸载
+  offload_param_device: none
+  # 是否启用 ZeRO-3 初始化
+  zero3_init_flag: true
+  # 是否保存16位精度的模型
+  zero3_save_16bit_model: true
+  # ZeRO 优化阶段：3 表示最高优化级别
+  zero_stage: 3
+
+# 分布式训练类型：DEEPSPEED 表示使用 DeepSpeed 框架
+distributed_type: DEEPSPEED
+# 是否将 bf16 降级为其他精度
+downcast_bf16: 'no'
+# 当前机器的排名（分布式训练中的标识）
+machine_rank: 0
+# 主训练函数名称
+main_training_function: main
+
+# 混合精度训练类型：可选 ['no', 'fp8', 'fp16', 'bf16']
+# bf16 表示使用 Brain Float 16 精度
+mixed_precision: bf16
+# 使用的机器数量
+num_machines: 1
+# 每个机器上使用的进程数量
+# 设置为3，这样只使用GPU 1,2,3进行训练，留出GPU 0用于vllm推理
+num_processes: 3
+# 分布式训练的后端类型：static 表示使用静态后端
+rdzv_backend: static
+# 是否所有训练节点在同一网络中
+same_network: true
+
+# TPU 相关配置
+# TPU 环境变量列表，用于设置 TPU 相关的环境变量
+tpu_env: [] 
+# 是否使用 TPU 集群
+tpu_use_cluster: false
+# 是否使用 sudo 运行 TPU 命令
+tpu_use_sudo: false
+# 是否使用 CPU 进行训练
+use_cpu: false

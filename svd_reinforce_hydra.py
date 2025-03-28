@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime
 from typing import Dict
+import time
 
 import hydra
 import numpy as np
@@ -45,6 +46,13 @@ def wandb_init(cfg, run_name: str, group_name: str, log_dir: str):
 def main(cfg):
     """Main function."""
 
+    # (无效)为了让程序从执行的缓存目录下读取数据集
+    hf_home = cfg.hf_home
+    os.environ["HF_HOME"] = hf_home
+
+    # 配置分解后的svd参数在哪个文件夹下保存。默认是运行目录，导致老被删。
+    param_folder_path = cfg.param_folder_path
+
     num_iters = cfg.num_iters
     test_interval = cfg.test_interval
 
@@ -76,7 +84,7 @@ def main(cfg):
     base_model: BaseModel = hydra.utils.instantiate(cfg.base_model)
 
     model_id = base_model.get_model_id()
-    decomposed_param_file = base_model.get_param_file(param_folder_path="")
+    decomposed_param_file = base_model.get_param_file(param_folder_path=param_folder_path)
 
     extract_svd = cfg.extract_svd or (not os.path.exists(decomposed_param_file))
 
@@ -103,8 +111,12 @@ def main(cfg):
         group_name = cfg.wandb_group_name
     os.makedirs(log_dir, exist_ok=True)
 
-    vllm_model = task_loader.get_vllm_model(model_id=model_id)
-
+    print("【info】 开始获取vllm模型")
+    os.system("nvidia-smi")
+    # vllm_model = task_loader.get_vllm_model(model_id=model_id)
+    vllm_model = ""
+    print("【info】 获取vllm模型成功")
+    os.system("nvidia-smi")
     train_eval, *test_evals = task_loader.get_evaluator()
     if task_loader.has_transfer_split:
         test_eval, transfer_eval = test_evals
@@ -112,7 +124,9 @@ def main(cfg):
         test_eval = test_evals[0]
 
     train_data, train_ix, valid_ix = task_loader.get_train_data()
-    gpu = torch.device("cuda:1")
+    # gpu = torch.device("cuda:1")
+    # 去掉限制；aa
+    gpu = torch.device("cuda")
     np_random = np.random.RandomState(seed)
 
     # cpu + float32 for initial SVD decomposition
@@ -122,9 +136,13 @@ def main(cfg):
         )
     else:
         # Load model and tokenizer.
+        # 一开始device_map="cuda:1"
         model = AutoModelForCausalLM.from_pretrained(
-            model_id, device_map="cuda:1", torch_dtype=torch.bfloat16
+            model_id, device_map="auto", torch_dtype=torch.bfloat16
         )
+
+    print("【info】 结束AutoModelForCausalLM")
+    os.system("nvidia-smi")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     base_params = model.state_dict()
 
@@ -137,9 +155,14 @@ def main(cfg):
         print("Decomposed params not found. Decomposing...")
         decomposed_params = {}
         for k, v in base_params.items():
+            print(f"k的名称:{k}, v的shape: {v.shape}")
             if "norm" not in k:
-                print(k)
+                # print(k)
+                if v.dim() < 2:
+                    print(f"Skipping {k} (shape: {v.shape}): requires at least 2D for SVD.")
+                    continue  # 跳过当前参数，继续下一个循环
                 U, S, V = torch.svd(v)
+                print(f"U的shape: {U.shape}, S的shape: {S.shape}, V的shape: {V.shape}")
                 decomposed_params[f"{k}.U"] = U
                 decomposed_params[f"{k}.S"] = S
                 decomposed_params[f"{k}.V"] = V
@@ -152,9 +175,14 @@ def main(cfg):
         print("Decomposed params found. Loading...")
         assert not extract_svd
         decomposed_params = torch.load(decomposed_param_file)
-    for k, v in decomposed_params.items():
-        decomposed_params[k] = v.to(torch.bfloat16).to(gpu)
 
+    print("【info】 开始进行 v.to(torch.bfloat16).to(gpu)")
+    for k, v in decomposed_params.items():
+        pass
+        # decomposed_params[k] = v.to(torch.bfloat16).to(gpu)
+
+    print("【info】 开始进行 v.to(torch.bfloat16).to(gpu)")
+    os.system("nvidia-smi")
     if cfg.wandb_log:
         wandb = wandb_init(
             cfg=cfg, group_name=group_name, run_name=run_name, log_dir=log_dir
@@ -172,7 +200,8 @@ def main(cfg):
         policy=policy,
         gpu=gpu,
     )
-
+    print("【info】 结束DOptimizationAlgorithm")
+    os.system("nvidia-smi")
     if resuming_from_ckpt and os.path.exists(load_ckpt):
         print(f"Starting from checkpoint at: {load_ckpt}")
         # load the lora weight
@@ -294,17 +323,24 @@ def main(cfg):
     test_at_best = 0.0
     transfer_at_best = 0.0
     for i in range(num_iters):
-
+        # 总担心训练集没有用完，但是，深度学习确实会随机从训练集抽几个bacthsize，但是抽很多轮的情况
+        # replace=False，意味着，抽过的样本不会再抽到。
         batch_ix = np_random.choice(train_ix, size=clipped_batch_size, replace=False)
 
+        # 打印当前时间
+        current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        print(f"当前迭代 {i+1}/{num_iters}，时间: {current_time}")
+
+        print("【info】 开始step_optimization")
+        os.system("nvidia-smi")
         optimization_algorithm.step_optimization(
-            model_id=model_id,
-            model=model,
+            model_id=model_id, # 模型的标识符，例如 "qwq32b"
+            model=model, # 正在训练的语言模型实例
             tokenizer=tokenizer,
-            policy=policy,
-            task_loader=task_loader,
-            batch_ix=batch_ix,
-            train_data=train_data,
+            policy=policy, # 参数调整策略，控制如何修改模型权重
+            task_loader=task_loader, # 任务数据加载器，提供训练和评估数据
+            batch_ix=batch_ix, #刚才随机选择的训练样本索引
+            train_data=train_data, #完整的训练数据集
             train_eval=train_eval,
             base_params=base_params,
             decomposed_params=decomposed_params,

@@ -96,6 +96,7 @@ class WeightedCombination(Policy):
         self.norm = norm_coeffs
         self.per_layer = per_layer
         self.trainable_params = [self.adaptive_weights]
+        self.decomposed_params = decomposed_params
 
     def get_weight_to_combine(self, k, weights_dict_idx):
         new_key = k.replace(".", "_")
@@ -136,3 +137,27 @@ class WeightedCombination(Policy):
             for i, w in enumerate(avg_weights.tolist())
         }
         metrics_to_log.update(**dict_to_log)
+        
+    def set_expert_weights(self, expert_weights: List[float]):
+        """
+        设置专家权重，用于实时调整
+        
+        Args:
+            expert_weights: 专家权重列表，长度必须等于专家数量
+        """
+        assert len(expert_weights) == self.num_weights_dict, f"专家权重数量必须为 {self.num_weights_dict}"
+        
+        # 确保权重总和为1
+        if sum(expert_weights) == 0:
+            expert_weights = [1.0 / self.num_weights_dict for _ in range(self.num_weights_dict)]
+        else:
+            sum_weights = sum(expert_weights)
+            expert_weights = [w / sum_weights for w in expert_weights]
+        
+        # 转换为张量并设置到adaptive_weights参数
+        weights_tensor = torch.tensor(expert_weights, device=self.adaptive_weights.device)
+        
+        # 对所有层使用相同的权重
+        with torch.no_grad():
+            for i in range(self.learned_params_per_weight_dict):
+                self.adaptive_weights[:, i] = weights_tensor

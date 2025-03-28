@@ -1,0 +1,11 @@
+base_model:
+  _target_: base_model.QwQ32B
+
+
+base_model_name: qwq32b
+  
+# 这个路径需要在训练后更新为您自己训练的错误案例专家模型
+reference_params_results:
+  - "ckpts/learnable_params/qwq32b_error_case_expert1.pt"
+  - "ckpts/learnable_params/qwq32b_error_case_expert2.pt"
+  - "ckpts/learnable_params/qwq32b_error_case_expert3.pt" 

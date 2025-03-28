@@ -26,7 +26,8 @@ exp_suffix: 'st'
 
 exp_name: ${base_model_name}/${optim_name}-${exp_suffix}
 
-wandb_log: true # enabled by default
+# wandb_log: true # enabled by default
+wandb_log: false
 wandb_project: shakeoff
 wandb_group_name: ${exp_name}
 extract_svd: false
@@ -36,3 +37,9 @@ out_dir: results
 hydra:
   run:
     dir: ${out_dir}/
+
+# 配置HF的全局缓存路径，即，未联网状态下从哪读取数据集。
+hf_home: /data1/yammyjiang/new_space/light_things/LLM/self-adaptive-llms/download
+
+# 配置分解后的svd参数在哪个文件夹下保存。默认是运行目录，导致老被删。
+param_folder_path: /data1/yammyjiang/new_space/heavy_things/self-adaptive-llms/svd_params
